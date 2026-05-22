@@ -1,0 +1,2111 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SILAHAP - Sistem Informasi Layanan Arsip Hasil Pemeriksaan</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- FontAwesome Icons -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Konfigurasi Font & Custom Style -->
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    .blur-bg {
+      backdrop-filter: blur(8px);
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen custom-scrollbar">
+
+  <script>
+    // Aplikasi State
+    const AppState = {
+      isLoggedIn: false,
+      currentTab: 'dashboard', // dashboard, lhp, reviu, monitoring, settings
+      currentPassword: '', // Password custom, default 'silahap123'
+      connectionMode: 'demo', // 'demo' (LocalStorage) atau 'gas' (Google Apps Script API)
+      gasUrl: '', // URL Web App Google Apps Script
+      geminiApiKey: '', // API Key Gemini untuk asisten AI
+      documents: [],
+      categories: ['Keuangan', 'Kinerja', 'SDM', 'Aset', 'Pengadaan', 'Kepatuhan'],
+      activeDoc: null, // Digunakan saat edit atau lihat detail
+      searchQuery: '',
+      filterYear: '',
+      filterCategory: '',
+      
+      // Data dummy fallback jika mode demo atau sebelum terkoneksi Google Sheet
+      localMockData: [
+        {
+          "ID": "DOC-170000001",
+          "Nomor LHP": "01/LHP/XIX.A/05/2026",
+          "Tahun": "2026",
+          "Kategori": "Keuangan",
+          "Temuan": "Ditemukan selisih saldo kas bendahara pengeluaran sebesar Rp 15.250.000,- akibat keterlambatan penyetoran pajak daerah ke kas negara.",
+          "Judul Dokumen": "Laporan Realisasi Anggaran Triwulan I Dinas Pendapatan",
+          "Link File": "https://drive.google.com/drive/folders/sample-lhp-silahap",
+          "Tipe Dokumen": "LHP",
+          "Tanggal Input": "2026-05-15",
+          "Penginput": "Administrator Utama"
+        },
+        {
+          "ID": "DOC-170000002",
+          "Nomor LHP": "05/REV-TEK/2026",
+          "Tahun": "2026",
+          "Kategori": "Kinerja",
+          "Temuan": "Reviu kesiapan menunjukkan 3 paket pembangunan konstruksi jalan raya belum mendapatkan tanda tangan verifikasi dari tim teknis tata ruang.",
+          "Judul Dokumen": "Reviu Kesiapan Pengadaan Konstruksi Jembatan Selat",
+          "Link File": "https://drive.google.com/drive/folders/sample-reviu-silahap",
+          "Tipe Dokumen": "Reviu",
+          "Tanggal Input": "2026-05-18",
+          "Penginput": "Irban Wilayah II"
+        },
+        {
+          "ID": "DOC-170000003",
+          "Nomor LHP": "09/MON-TL/V/2026",
+          "Tahun": "2025",
+          "Kategori": "SDM",
+          "Temuan": "Hasil monitoring tindak lanjut menunjukkan pemenuhan sertifikasi fungsional baru diselesaikan 2 dari total 5 staf yang disyaratkan.",
+          "Judul Dokumen": "Monitoring Tindak Lanjut Sertifikasi Analis Kepegawaian",
+          "Link File": "https://drive.google.com/drive/folders/sample-mon-silahap",
+          "Tipe Dokumen": "Monitoring",
+          "Tanggal Input": "2026-05-20",
+          "Penginput": "Tim Satgas Pemantau"
+        },
+        {
+          "ID": "DOC-170000004",
+          "Nomor LHP": "12/LHP/XIX.A/2025",
+          "Tahun": "2025",
+          "Kategori": "Aset",
+          "Temuan": "Terdapat 14 unit kendaraan dinas operasional roda dua yang belum dilengkapi dokumen BPKB aktif dan dikuasai oleh mantan pejabat purnabakti.",
+          "Judul Dokumen": "Laporan Pemeriksaan Inventarisasi Aset Daerah",
+          "Link File": "https://drive.google.com/drive/folders/sample-aset-silahap",
+          "Tipe Dokumen": "LHP",
+          "Tanggal Input": "2025-11-04",
+          "Penginput": "Staf Pengelola Inventaris"
+        }
+      ]
+    };
+
+    // Objek chart untuk memudahkan penghancuran & pembuatan ulang saat data update
+    let chartKategori = null;
+    let chartTipe = null;
+
+    // Load data konfigurasi awal dari LocalStorage jika tersedia
+    function initSettings() {
+      const savedPass = localStorage.getItem('silahap_password');
+      if (savedPass) {
+        AppState.currentPassword = savedPass;
+      } else {
+        AppState.currentPassword = 'silahap123'; // Default password
+        localStorage.setItem('silahap_password', 'silahap123');
+      }
+
+      const savedMode = localStorage.getItem('silahap_mode');
+      if (savedMode) {
+        AppState.connectionMode = savedMode;
+      }
+      
+      const savedUrl = localStorage.getItem('silahap_gas_url');
+      if (savedUrl) {
+        AppState.gasUrl = savedUrl;
+      }
+
+      const savedGeminiKey = localStorage.getItem('silahap_gemini_key');
+      if (savedGeminiKey) {
+        AppState.geminiApiKey = savedGeminiKey;
+      }
+
+      const savedDocs = localStorage.getItem('silahap_local_docs');
+      if (savedDocs) {
+        AppState.documents = JSON.parse(savedDocs);
+      } else {
+        AppState.documents = [...AppState.localMockData];
+        localStorage.setItem('silahap_local_docs', JSON.stringify(AppState.documents));
+      }
+    }
+  </script>
+
+  <!-- SCREEN 1: HALAMAN LOGIN (Selamat Datang) -->
+  <div id="loginScreen" class="min-h-screen flex items-center justify-center bg-gradient-to-tr from-slate-900 via-indigo-950 to-slate-950 p-4 transition-all duration-300">
+    <div class="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl w-full max-w-md p-8 shadow-2xl transition-all duration-300 transform scale-100">
+      <div class="text-center mb-8">
+        <div class="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-500/30">
+          <i class="fa-solid fa-box-archive text-white text-4xl"></i>
+        </div>
+        <h1 class="text-3xl font-extrabold text-white tracking-tight">SILAHAP</h1>
+        <p class="text-indigo-200 text-sm mt-2">Sistem Informasi Layanan Arsip Hasil Pemeriksaan</p>
+        <div class="h-[2px] w-12 bg-indigo-500 mx-auto mt-4 rounded-full"></div>
+      </div>
+
+      <div class="bg-white/5 border border-white/10 rounded-xl p-4 text-center mb-6">
+        <h2 class="text-white font-semibold text-lg">Selamat Datang di SILAHAP</h2>
+        <p class="text-slate-300 text-xs mt-1">Sistem arsip terpadu dokumen LHP, Reviu, dan Monitoring tindak lanjut pemeriksaan digital.</p>
+      </div>
+
+      <form id="loginForm" onsubmit="handleLogin(event)" class="space-y-4">
+        <div>
+          <label for="password" class="block text-slate-300 text-xs font-bold uppercase tracking-wider mb-2">Kata Sandi Akses</label>
+          <div class="relative rounded-lg shadow-sm">
+            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <i class="fa-solid fa-lock text-slate-400"></i>
+            </div>
+            <input 
+              type="password" 
+              id="password" 
+              placeholder="Masukkan sandi..." 
+              class="block w-full pl-10 pr-10 py-3 bg-white/10 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-white placeholder-slate-400 transition"
+              required
+            >
+            <button 
+              type="button" 
+              onclick="togglePasswordVisibility('password')" 
+              class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-white transition"
+            >
+              <i id="passwordEye" class="fa-solid fa-eye"></i>
+            </button>
+          </div>
+        </div>
+
+        <div id="loginErrorMessage" class="text-red-400 text-xs text-center hidden">
+          <i class="fa-solid fa-triangle-exclamation mr-1"></i> Kata sandi salah. Silakan coba lagi.
+        </div>
+
+        <button 
+          type="submit" 
+          class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-indigo-600/20 hover:shadow-indigo-500/30 transition transform hover:-translate-y-0.5 active:translate-y-0 flex items-center justify-center space-x-2"
+        >
+          <span>Masuk Aplikasi</span>
+          <i class="fa-solid fa-arrow-right"></i>
+        </button>
+      </form>
+
+      <div class="text-center mt-6">
+        <p class="text-slate-400 text-xs">Aplikasi Arsip Terintegrasi Cloud & Offline</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCREEN 2: MAIN PANEL APLIKASI (Setelah Login) -->
+  <div id="appScreen" class="min-h-screen flex flex-col md:flex-row hidden">
+    
+    <!-- SIDEBAR NAVIGASI (Kiri) -->
+    <aside id="sidebar" class="w-full md:w-64 bg-slate-950 text-slate-300 flex-shrink-0 flex flex-col border-r border-slate-800 transition-all duration-300">
+      <!-- Sidebar Header -->
+      <div class="p-6 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <div class="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center">
+            <i class="fa-solid fa-box-archive text-white text-xl"></i>
+          </div>
+          <div>
+            <span class="text-white text-lg font-bold block leading-none">SILAHAP</span>
+            <span class="text-indigo-400 text-[10px] tracking-widest uppercase font-bold">V1.0 WebApp</span>
+          </div>
+        </div>
+        <button onclick="logout()" class="md:hidden text-slate-400 hover:text-red-400 transition" title="Log Out">
+          <i class="fa-solid fa-power-off text-lg"></i>
+        </button>
+      </div>
+
+      <!-- Informasi Akun -->
+      <div class="px-6 py-4 border-b border-slate-800/50 bg-slate-900/40">
+        <div class="flex items-center space-x-3">
+          <div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-extrabold text-sm uppercase">
+            AD
+          </div>
+          <div class="overflow-hidden">
+            <p class="text-xs text-slate-400 leading-none">Selamat Datang,</p>
+            <p class="text-sm font-semibold text-white truncate mt-1">Petugas Arsip</p>
+          </div>
+        </div>
+        
+        <!-- Badge Mode Koneksi -->
+        <div class="mt-3 flex items-center justify-between bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-800">
+          <span class="text-[10px] text-slate-400">Mode:</span>
+          <span id="sidebarModeBadge" class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full">
+            Local Demo
+          </span>
+        </div>
+      </div>
+
+      <!-- Menu Items -->
+      <nav class="flex-1 p-4 space-y-1.5 overflow-y-auto custom-scrollbar">
+        <button 
+          id="btn-tab-dashboard" 
+          onclick="switchTab('dashboard')"
+          class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium text-sm transition"
+        >
+          <i class="fa-solid fa-chart-pie text-lg w-5 text-center"></i>
+          <span>Dashboard</span>
+        </button>
+
+        <div class="pt-4 pb-2 px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Kategori Dokumen</div>
+
+        <button 
+          id="btn-tab-lhp" 
+          onclick="switchTab('lhp')"
+          class="w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm transition"
+        >
+          <div class="flex items-center space-x-3">
+            <i class="fa-solid fa-file-shield text-lg w-5 text-center"></i>
+            <span>Dokumen LHP</span>
+          </div>
+          <span id="badge-count-lhp" class="text-xs bg-slate-900 text-slate-400 px-2 py-0.5 rounded-full font-bold">0</span>
+        </button>
+
+        <button 
+          id="btn-tab-reviu" 
+          onclick="switchTab('reviu')"
+          class="w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm transition"
+        >
+          <div class="flex items-center space-x-3">
+            <i class="fa-solid fa-file-signature text-lg w-5 text-center"></i>
+            <span>Dokumen Reviu</span>
+          </div>
+          <span id="badge-count-reviu" class="text-xs bg-slate-900 text-slate-400 px-2 py-0.5 rounded-full font-bold">0</span>
+        </button>
+
+        <button 
+          id="btn-tab-monitoring" 
+          onclick="switchTab('monitoring')"
+          class="w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm transition"
+        >
+          <div class="flex items-center space-x-3">
+            <i class="fa-solid fa-file-circle-check text-lg w-5 text-center"></i>
+            <span>Dokumen Monitoring</span>
+          </div>
+          <span id="badge-count-monitoring" class="text-xs bg-slate-900 text-slate-400 px-2 py-0.5 rounded-full font-bold">0</span>
+        </button>
+
+        <div class="pt-4 pb-2 px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Sistem</div>
+
+        <button 
+          id="btn-tab-settings" 
+          onclick="switchTab('settings')"
+          class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium text-sm transition"
+        >
+          <i class="fa-solid fa-gears text-lg w-5 text-center"></i>
+          <span>Pengaturan Koneksi</span>
+        </button>
+      </nav>
+
+      <!-- Sidebar Footer -->
+      <div class="p-4 border-t border-slate-800 flex items-center justify-between hidden md:flex">
+        <span class="text-xs text-slate-500">© 2026 SILAHAP</span>
+        <button onclick="logout()" class="text-slate-400 hover:text-red-400 transition" title="Log Out">
+          <i class="fa-solid fa-right-from-bracket text-lg"></i>
+        </button>
+      </div>
+    </aside>
+
+    <!-- KONTEN UTAMA (Kanan) -->
+    <main class="flex-1 flex flex-col min-w-0 overflow-y-auto max-h-screen custom-scrollbar">
+      
+      <!-- Top Header / Bar -->
+      <header class="bg-white border-b border-slate-200 px-6 py-4 sticky top-0 z-10 flex items-center justify-between shadow-sm">
+        <div class="flex items-center space-x-4">
+          <!-- Mobile Sidebar Toggle -->
+          <button onclick="toggleMobileSidebar()" class="md:hidden text-slate-600 p-2 hover:bg-slate-100 rounded-lg transition">
+            <i class="fa-solid fa-bars text-lg"></i>
+          </button>
+          <div>
+            <h2 id="pageTitle" class="text-xl font-bold text-slate-800">Dashboard Utama</h2>
+            <p id="pageSubtitle" class="text-xs text-slate-500 hidden md:block">Ikhtisar statistik dan visualisasi arsip temuan pemeriksaan.</p>
+          </div>
+        </div>
+        
+        <div class="flex items-center space-x-3">
+          <!-- Tombol Refresh Data Global -->
+          <button 
+            onclick="syncData()" 
+            class="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-4 py-2 rounded-xl text-xs flex items-center space-x-2 transition"
+            title="Sinkronkan dengan Database"
+          >
+            <i id="syncIcon" class="fa-solid fa-arrows-rotate"></i>
+            <span class="hidden sm:inline">Sinkronisasi Data</span>
+          </button>
+
+          <!-- Tombol Arsip Baru -->
+          <button 
+            onclick="openAddModal()" 
+            class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-4 py-2 rounded-xl text-xs flex items-center space-x-2 shadow-lg shadow-indigo-600/10 hover:shadow-indigo-500/20 transition"
+          >
+            <i class="fa-solid fa-plus"></i>
+            <span>Arsipkan Baru</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Isian Dinamis Berdasarkan Tab -->
+      <div class="p-6 flex-1 space-y-6">
+
+        <!-- TAB 1: DASHBOARD -->
+        <section id="tab-content-dashboard" class="space-y-6">
+          <!-- Kartu Statistik Utama -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <!-- Total Dokumen -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center space-x-4 hover:shadow-md transition">
+              <div class="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600">
+                <i class="fa-solid fa-folder-open text-2xl"></i>
+              </div>
+              <div>
+                <span class="text-xs text-slate-400 font-semibold block uppercase tracking-wide">Total Arsip</span>
+                <span id="stat-total" class="text-2xl font-black text-slate-800 leading-tight">0</span>
+              </div>
+            </div>
+
+            <!-- Total LHP -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center space-x-4 hover:shadow-md transition">
+              <div class="w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600">
+                <i class="fa-solid fa-file-shield text-2xl"></i>
+              </div>
+              <div>
+                <span class="text-xs text-slate-400 font-semibold block uppercase tracking-wide">Dokumen LHP</span>
+                <span id="stat-lhp" class="text-2xl font-black text-slate-800 leading-tight">0</span>
+              </div>
+            </div>
+
+            <!-- Total Reviu -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center space-x-4 hover:shadow-md transition">
+              <div class="w-12 h-12 bg-sky-50 rounded-xl flex items-center justify-center text-sky-600">
+                <i class="fa-solid fa-file-signature text-2xl"></i>
+              </div>
+              <div>
+                <span class="text-xs text-slate-400 font-semibold block uppercase tracking-wide">Dokumen Reviu</span>
+                <span id="stat-reviu" class="text-2xl font-black text-slate-800 leading-tight">0</span>
+              </div>
+            </div>
+
+            <!-- Total Monitoring -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center space-x-4 hover:shadow-md transition">
+              <div class="w-12 h-12 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600">
+                <i class="fa-solid fa-file-circle-check text-2xl"></i>
+              </div>
+              <div>
+                <span class="text-xs text-slate-400 font-semibold block uppercase tracking-wide">Monitoring</span>
+                <span id="stat-monitoring" class="text-2xl font-black text-slate-800 leading-tight">0</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Fitur Cerdas: Executive Summary AI Generative -->
+          <div class="bg-gradient-to-r from-indigo-900 to-slate-900 p-6 rounded-2xl border border-indigo-950 shadow-xl text-white">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div class="space-y-1">
+                <span class="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border border-indigo-400/20">
+                  <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Asisten Kebijakan AI
+                </span>
+                <h3 class="text-lg font-bold">Ringkasan Eksekutif & Analisis Tren Kerentanan</h3>
+                <p class="text-xs text-slate-300">Gunakan model AI Gemini untuk mengevaluasi semua temuan arsip aktif, merumuskan kerentanan kritis organisasi, dan menyusun saran kebijakan pimpinan.</p>
+              </div>
+              <button 
+                onclick="generateSystemicSummaryAI()" 
+                class="flex-shrink-0 bg-white hover:bg-slate-100 text-indigo-950 font-bold px-5 py-3 rounded-xl text-xs flex items-center justify-center space-x-2 transition shadow-md"
+              >
+                <i class="fa-solid fa-brain"></i>
+                <span>✨ Buat Ringkasan Eksekutif AI</span>
+              </button>
+            </div>
+
+            <!-- Hasil Analisis Eksekutif AI Dashboard -->
+            <div id="aiDashboardSummaryResult" class="hidden mt-6 bg-slate-950/40 border border-white/10 rounded-xl p-5 text-sm leading-relaxed space-y-4 max-h-[350px] overflow-y-auto custom-scrollbar">
+              <div class="flex items-center space-x-2 text-indigo-300 border-b border-white/5 pb-2 text-xs font-bold uppercase tracking-wider">
+                <i class="fa-solid fa-microchip"></i>
+                <span>Hasil Analisis Gemini AI</span>
+              </div>
+              <div id="aiDashboardSummaryText" class="text-slate-200 text-xs space-y-2"></div>
+            </div>
+          </div>
+
+          <!-- Bagian Chart Visualisasi & Analisis Rinci -->
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Chart Proporsi Tipe Dokumen -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm lg:col-span-1 flex flex-col justify-between">
+              <div>
+                <h3 class="text-md font-bold text-slate-800">Distribusi Arsip</h3>
+                <p class="text-xs text-slate-400 mb-4">Perbandingan persentase tipe dokumen yang diarsipkan.</p>
+              </div>
+              <div class="relative flex items-center justify-center h-56">
+                <canvas id="chartTipeCanvas"></canvas>
+              </div>
+              <div class="text-center mt-4 text-xs text-slate-400">
+                Jumlah dokumen terbagi ke LHP, Reviu, dan Monitoring.
+              </div>
+            </div>
+
+            <!-- Chart Jumlah Temuan Per Kategori -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm lg:col-span-2 flex flex-col justify-between">
+              <div>
+                <h3 class="text-md font-bold text-slate-800">Jumlah Kasus Per Kategori Temuan</h3>
+                <p class="text-xs text-slate-400 mb-4">Grafik rincian klasifikasi temuan dari seluruh pemeriksaan.</p>
+              </div>
+              <div class="relative h-56">
+                <canvas id="chartKategoriCanvas"></canvas>
+              </div>
+              <div class="text-center mt-4 text-xs text-slate-400">
+                Mencakup kategori Keuangan, Kinerja, SDM, Aset, Pengadaan, dan Kepatuhan.
+              </div>
+            </div>
+          </div>
+
+          <!-- Aktivitas Temuan Terbaru -->
+          <div class="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="text-md font-bold text-slate-800">Arsip Temuan Terkini</h3>
+                <p class="text-xs text-slate-400">Daftar masukan berkas laporan hasil pemeriksaan terakhir.</p>
+              </div>
+              <span class="text-xs bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full font-bold">Terbaru</span>
+            </div>
+            
+            <div class="overflow-x-auto custom-scrollbar">
+              <table class="w-full text-sm text-left text-slate-600">
+                <thead class="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
+                  <tr>
+                    <th scope="col" class="px-4 py-3">ID / Tanggal</th>
+                    <th scope="col" class="px-4 py-3">Nomor LHP & Judul</th>
+                    <th scope="col" class="px-4 py-3">Tipe & Kategori</th>
+                    <th scope="col" class="px-4 py-3">Rincian Temuan</th>
+                    <th scope="col" class="px-4 py-3 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="recentActivityTable">
+                  <!-- Baris dinamis diisi oleh JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 2, 3, 4: LIST DOKUMEN (DIKONDISIKAN SECARA DINAMIS DI CODE) -->
+        <section id="tab-content-documents" class="space-y-6 hidden">
+          <!-- Filter Panel -->
+          <div class="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
+            
+            <!-- Pencarian Kata Kunci -->
+            <div class="w-full md:w-1/3 relative">
+              <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <i class="fa-solid fa-magnifying-glass text-slate-400"></i>
+              </div>
+              <input 
+                type="text" 
+                id="docSearch" 
+                oninput="handleSearch(this.value)"
+                placeholder="Cari No. LHP, Judul, Penginput..." 
+                class="block w-full pl-10 pr-4 py-2 border border-slate-200 rounded-xl focus:ring-indigo-500 focus:border-indigo-500 text-sm placeholder-slate-400 transition"
+              >
+            </div>
+
+            <!-- Filter Kategori & Tahun -->
+            <div class="w-full md:w-auto flex flex-wrap gap-3 items-center">
+              <div>
+                <select 
+                  id="docFilterCategory" 
+                  onchange="handleCategoryFilter(this.value)"
+                  class="border border-slate-200 bg-white rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-slate-600"
+                >
+                  <option value="">Semua Kategori</option>
+                  <option value="Keuangan">Keuangan</option>
+                  <option value="Kinerja">Kinerja</option>
+                  <option value="SDM">SDM</option>
+                  <option value="Aset">Aset</option>
+                  <option value="Pengadaan">Pengadaan</option>
+                  <option value="Kepatuhan">Kepatuhan</option>
+                </select>
+              </div>
+
+              <div>
+                <select 
+                  id="docFilterYear" 
+                  onchange="handleYearFilter(this.value)"
+                  class="border border-slate-200 bg-white rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-slate-600"
+                >
+                  <option value="">Semua Tahun</option>
+                  <option value="2026">2026</option>
+                  <option value="2025">2025</option>
+                  <option value="2024">2024</option>
+                  <option value="2023">2023</option>
+                </select>
+              </div>
+
+              <button 
+                onclick="resetFilters()"
+                class="text-xs font-semibold text-slate-500 hover:text-indigo-600 transition px-2 py-1.5"
+                title="Reset Pencarian & Filter"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+
+          <!-- Loading Spinner -->
+          <div id="tableLoadingState" class="hidden flex-col items-center justify-center p-12 text-slate-500 space-y-3">
+            <i class="fa-solid fa-spinner text-3xl text-indigo-600 animate-spin"></i>
+            <span class="text-sm font-semibold">Mengunduh data arsip real-time...</span>
+          </div>
+
+          <!-- Empty State -->
+          <div id="tableEmptyState" class="hidden flex-col items-center justify-center p-12 bg-white rounded-2xl border border-dashed border-slate-200 text-slate-400 text-center space-y-3">
+            <i class="fa-solid fa-folder-open text-5xl text-slate-300"></i>
+            <div>
+              <p class="font-bold text-slate-600">Tidak ada arsip ditemukan</p>
+              <p class="text-xs">Ubah filter pencarian atau arsipkan dokumen baru.</p>
+            </div>
+          </div>
+
+          <!-- Grid/Table List Dokumen -->
+          <div id="tableContainer" class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+            <div class="overflow-x-auto custom-scrollbar">
+              <table class="w-full text-sm text-left text-slate-600">
+                <thead class="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
+                  <tr>
+                    <th scope="col" class="px-6 py-4">Informasi ID</th>
+                    <th scope="col" class="px-6 py-4">Nomor LHP / Judul Dokumen</th>
+                    <th scope="col" class="px-6 py-4">Kategori / Tahun</th>
+                    <th scope="col" class="px-6 py-4">Temuan Pemeriksaan</th>
+                    <th scope="col" class="px-6 py-4">Sumbu Berkas</th>
+                    <th scope="col" class="px-6 py-4 text-center">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="documentListTable">
+                  <!-- Baris data dimuat lewat renderDocuments() -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 5: SETTINGS -->
+        <section id="tab-content-settings" class="space-y-6 hidden">
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <!-- Konfigurasi Mode Penyimpanan -->
+            <div class="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm lg:col-span-2 space-y-6">
+              <div>
+                <h3 class="text-lg font-bold text-slate-800">Konfigurasi Konektivitas Database</h3>
+                <p class="text-xs text-slate-400">Integrasikan SILAHAP langsung dengan Google Sheets menggunakan Google Apps Script.</p>
+              </div>
+
+              <!-- Pilihan Mode -->
+              <div class="space-y-3">
+                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wide">Pilih Mode Penyimpanan</label>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <!-- Mode Demo -->
+                  <div 
+                    onclick="setStorageMode('demo')" 
+                    id="mode-card-demo"
+                    class="border-2 rounded-xl p-4 cursor-pointer transition flex items-start space-x-3"
+                  >
+                    <div class="p-2 bg-indigo-50 text-indigo-600 rounded-lg mt-0.5">
+                      <i class="fa-solid fa-server"></i>
+                    </div>
+                    <div>
+                      <h4 class="font-bold text-sm text-slate-700">Mode Lokal (Mock Sandbox)</h4>
+                      <p class="text-xs text-slate-400 mt-1">Data disimpan sementara di browser Anda tanpa memerlukan koneksi internet.</p>
+                    </div>
+                  </div>
+
+                  <!-- Mode Google Apps Script -->
+                  <div 
+                    onclick="setStorageMode('gas')" 
+                    id="mode-card-gas"
+                    class="border-2 rounded-xl p-4 cursor-pointer transition flex items-start space-x-3"
+                  >
+                    <div class="p-2 bg-purple-50 text-purple-600 rounded-lg mt-0.5">
+                      <i class="fa-solid fa-cloud"></i>
+                    </div>
+                    <div>
+                      <h4 class="font-bold text-sm text-slate-700">Mode Google Sheet Real-Time</h4>
+                      <p class="text-xs text-slate-400 mt-1">Simpan data langsung ke Google Sheets secara awan melalui perantara Apps Script API.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Input URL API Apps Script -->
+              <div id="gas-url-container" class="space-y-4 hidden">
+                <div class="space-y-2">
+                  <label for="gasUrlInput" class="block text-xs font-bold text-slate-500 uppercase tracking-wide">
+                    URL Web App Google Apps Script
+                  </label>
+                  <div class="flex gap-2">
+                    <input 
+                      type="url" 
+                      id="gasUrlInput" 
+                      placeholder="https://script.google.com/macros/s/.../exec"
+                      class="flex-1 border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500 transition"
+                    >
+                    <button 
+                      onclick="testGasConnection()"
+                      class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2 rounded-xl transition flex items-center space-x-1.5"
+                    >
+                      <i class="fa-solid fa-plug"></i>
+                      <span>Tes Koneksi</span>
+                    </button>
+                  </div>
+                  <p class="text-[11px] text-slate-400 italic">
+                    Tempel URL Web App dari deployment Google Apps Script Anda (pastikan hak akses diset "Anyone").
+                  </p>
+                </div>
+              </div>
+
+              <!-- Input API Key Gemini -->
+              <div class="space-y-2 pt-2">
+                <label for="geminiKeyInput" class="block text-xs font-bold text-slate-500 uppercase tracking-wide">
+                  Gemini AI API Key (Opsional)
+                </label>
+                <input 
+                  type="password" 
+                  id="geminiKeyInput" 
+                  placeholder="Masukkan API Key AI Gemini Anda..."
+                  class="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500 transition"
+                >
+                <p class="text-[11px] text-slate-400">
+                  Digunakan untuk mengaktifkan asisten cerdas pembuat ringkasan eksekutif dan rekomendasi tindakan kepatuhan hukum secara otomatis.
+                </p>
+              </div>
+
+              <!-- Simpan Konfigurasi Koneksi -->
+              <div class="pt-4 border-t border-slate-100 flex justify-end">
+                <button 
+                  onclick="saveConnectionConfig()" 
+                  class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-6 py-2.5 rounded-xl text-xs shadow-lg shadow-indigo-600/10 hover:shadow-indigo-500/20 transition flex items-center space-x-2"
+                >
+                  <i class="fa-solid fa-circle-check"></i>
+                  <span>Simpan Konfigurasi</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Pengaturan Kredensial & Reset Sandbox -->
+            <div class="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm lg:col-span-1 space-y-6">
+              <div>
+                <h3 class="text-lg font-bold text-slate-800">Sandi & Kendali Lokal</h3>
+                <p class="text-xs text-slate-400">Kelola keamanan masuk aplikasi SILAHAP.</p>
+              </div>
+
+              <!-- Form Ubah Password -->
+              <div class="space-y-3">
+                <label for="newPassInput" class="block text-xs font-bold text-slate-500 uppercase tracking-wide">Ubah Kata Sandi Masuk</label>
+                <input 
+                  type="password" 
+                  id="newPassInput" 
+                  placeholder="Sandi baru..."
+                  class="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                >
+                <button 
+                  onclick="updatePassword()"
+                  class="w-full bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs py-2.5 rounded-xl transition"
+                >
+                  Perbarui Kata Sandi
+                </button>
+              </div>
+
+              <hr class="border-slate-100">
+
+              <!-- Bersihkan Sandbox -->
+              <div class="space-y-2">
+                <span class="block text-xs font-bold text-red-500 uppercase tracking-wide">Area Rawan (Sandbox)</span>
+                <p class="text-[11px] text-slate-400 leading-normal">Mengatur ulang database lokal browser kembali ke data sampel bawaan awal pabrik.</p>
+                <button 
+                  onclick="resetLocalDatabase()"
+                  class="w-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-semibold text-xs py-2 rounded-xl transition"
+                >
+                  Reset Data Sandbox Lokal
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- MODAL 1: TAMBAH & EDIT DOKUMEN ARSIP -->
+  <div id="docModal" class="fixed inset-0 bg-slate-900/60 blur-bg z-50 flex items-center justify-center p-4 hidden transition-opacity duration-300">
+    <div class="bg-white rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl transform scale-100 transition-all duration-300 flex flex-col max-h-[90vh]">
+      <!-- Header Modal -->
+      <div class="px-6 py-4 bg-indigo-600 text-white flex items-center justify-between">
+        <div>
+          <h3 id="modalTitle" class="text-lg font-bold">Arsipkan Dokumen Hasil Pemeriksaan</h3>
+          <p class="text-[11px] text-indigo-100">Isi formulir arsip secara lengkap dan tervalidasi.</p>
+        </div>
+        <button onclick="closeDocModal()" class="text-white hover:text-slate-200 p-2 transition">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+
+      <!-- Form Modal -->
+      <form id="docForm" onsubmit="submitDocForm(event)" class="p-6 space-y-4 overflow-y-auto custom-scrollbar flex-1">
+        <input type="hidden" id="form-doc-id">
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- Tipe Dokumen -->
+          <div>
+            <label for="form-tipe" class="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Tipe Dokumen <span class="text-red-500">*</span></label>
+            <select 
+              id="form-tipe" 
+              class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+              required
+            >
+              <option value="LHP">LHP (Laporan Hasil Pemeriksaan)</option>
+              <option value="Reviu">Reviu Dokumen</option>
+              <option value="Monitoring">Monitoring Tindak Lanjut</option>
+            </select>
+          </div>
+
+          <!-- Kategori Temuan -->
+          <div>
+            <label for="form-kategori" class="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Kategori Temuan <span class="text-red-500">*</span></label>
+            <select 
+              id="form-kategori" 
+              class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+              required
+            >
+              <!-- Dimuat dinamis -->
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <!-- Nomor LHP -->
+          <div class="md:col-span-2">
+            <label for="form-nomor" class="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Nomor LHP / Berkas <span class="text-red-500">*</span></label>
+            <input 
+              type="text" 
+              id="form-nomor" 
+              placeholder="Contoh: 01/LHP/XIX.A/05/2026"
+              class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+              required
+            >
+          </div>
+
+          <!-- Tahun Pemeriksaan -->
+          <div>
+            <label for="form-tahun" class="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Tahun <span class="text-red-500">*</span></label>
+            <select 
+              id="form-tahun" 
+              class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+              required
+            >
+              <option value="2026">2026</option>
+              <option value="2025">2025</option>
+              <option value="2024">2024</option>
+              <option value="2023">2023</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Judul Dokumen -->
+        <div>
+          <label for="form-judul" class="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Judul Resmi Dokumen <span class="text-red-500">*</span></label>
+          <input 
+            type="text" 
+            id="form-judul" 
+            placeholder="Masukkan judul berkas secara rinci..."
+            class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+            required
+          >
+        </div>
+
+        <!-- Link File (Google Drive) -->
+        <div>
+          <label for="form-link" class="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Tautan File Dokumen (Google Drive/Sistem Lain)</label>
+          <input 
+            type="url" 
+            id="form-link" 
+            placeholder="https://drive.google.com/..."
+            class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+          >
+        </div>
+
+        <!-- Rincian Temuan Pemeriksaan -->
+        <div>
+          <label for="form-temuan" class="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Deskripsi Rincian Temuan Audit <span class="text-red-500">*</span></label>
+          <textarea 
+            id="form-temuan" 
+            rows="4"
+            placeholder="Ketik rincian deviasi, selisih anggaran, penyimpangan, atau rekomendasi..."
+            class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500 custom-scrollbar"
+            required
+          ></textarea>
+        </div>
+
+        <!-- Penginput -->
+        <div>
+          <label for="form-penginput" class="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Nama Operator Penginput <span class="text-red-500">*</span></label>
+          <input 
+            type="text" 
+            id="form-penginput" 
+            placeholder="Ketik nama pemeriksa atau penanggung jawab..."
+            class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500"
+            required
+          >
+        </div>
+
+        <!-- Footer Modal Buttons -->
+        <div class="pt-4 border-t border-slate-100 flex items-center justify-end space-x-3">
+          <button 
+            type="button" 
+            onclick="closeDocModal()" 
+            class="bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold px-4 py-2 rounded-xl text-xs transition"
+          >
+            Batal
+          </button>
+          <button 
+            type="submit" 
+            class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-5 py-2.5 rounded-xl text-xs transition flex items-center space-x-1.5"
+          >
+            <i class="fa-solid fa-circle-check"></i>
+            <span>Simpan Arsip</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 2: DETAIL TAMPILAN DOKUMEN -->
+  <div id="detailModal" class="fixed inset-0 bg-slate-900/60 blur-bg z-50 flex items-center justify-center p-4 hidden transition-opacity duration-300">
+    <div class="bg-white rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl transform scale-100 transition-all duration-300 flex flex-col max-h-[90vh]">
+      <!-- Header -->
+      <div class="px-6 py-4 bg-indigo-950 text-white flex items-center justify-between">
+        <div>
+          <h3 class="text-lg font-bold">Rincian Arsip Dokumen</h3>
+          <p id="detail-header-id" class="text-[11px] text-indigo-300 font-mono">ID: -</p>
+        </div>
+        <button onclick="closeDetailModal()" class="text-slate-400 hover:text-white p-2 transition">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+
+      <!-- Konten -->
+      <div class="p-6 space-y-4 overflow-y-auto custom-scrollbar flex-1">
+        <!-- Klasifikasi Badge -->
+        <div class="flex flex-wrap gap-2">
+          <span id="detail-badge-tipe" class="text-xs px-2.5 py-1 rounded-full font-bold uppercase tracking-wider">Tipe</span>
+          <span id="detail-badge-kategori" class="text-xs bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full font-bold">Kategori</span>
+          <span id="detail-badge-tahun" class="text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full font-bold">Tahun</span>
+        </div>
+
+        <div class="space-y-3 pt-2">
+          <div>
+            <span class="text-[10px] text-slate-400 font-bold uppercase block tracking-wider">Nomor LHP</span>
+            <p id="detail-nomor" class="text-sm font-semibold text-slate-800">-</p>
+          </div>
+
+          <div>
+            <span class="text-[10px] text-slate-400 font-bold uppercase block tracking-wider">Judul Dokumen</span>
+            <p id="detail-judul" class="text-sm font-semibold text-slate-800 leading-snug">-</p>
+          </div>
+
+          <hr class="border-slate-100">
+
+          <div>
+            <span class="text-[10px] text-slate-400 font-bold uppercase block tracking-wider mb-1">Rincian Temuan Hasil Pemeriksaan</span>
+            <div id="detail-temuan" class="text-xs bg-slate-50 border border-slate-100 rounded-xl p-3 text-slate-700 leading-relaxed max-h-40 overflow-y-auto custom-scrollbar">
+              -
+            </div>
+          </div>
+
+          <!-- Fitur Cerdas AI: Analisis Temuan Spesifik -->
+          <div class="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-4 mt-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] text-indigo-800 font-extrabold uppercase tracking-wide flex items-center gap-1.5">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> Analisis Cerdas Gemini AI
+              </span>
+              <button 
+                type="button"
+                id="btnAiAnalyzeSpecific"
+                onclick="analyzeSpecificFindingAI()"
+                class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[10px] px-3 py-1.5 rounded-lg flex items-center space-x-1 transition"
+              >
+                <span>✨ Analisis Solusi AI</span>
+              </button>
+            </div>
+
+            <!-- Area Hasil AI -->
+            <div id="aiSpecificResultArea" class="hidden text-xs text-slate-700 leading-relaxed border-t border-indigo-100/60 pt-3 space-y-2">
+              <div id="aiSpecificLoading" class="hidden flex items-center space-x-2 text-indigo-600 py-1 font-semibold">
+                <i class="fa-solid fa-spinner animate-spin"></i>
+                <span>Memproses matriks risiko & rekomendasi hukum...</span>
+              </div>
+              <div id="aiSpecificText" class="text-slate-600 bg-white border border-slate-100 rounded-lg p-2.5">
+                <!-- Disuntikkan lewat JS -->
+              </div>
+            </div>
+          </div>
+
+          <hr class="border-slate-100">
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <span class="text-[10px] text-slate-400 font-bold uppercase block tracking-wider">Tanggal Input</span>
+              <p id="detail-tanggal" class="text-xs font-semibold text-slate-600">-</p>
+            </div>
+            <div>
+              <span class="text-[10px] text-slate-400 font-bold uppercase block tracking-wider">Operator Penginput</span>
+              <p id="detail-penginput" class="text-xs font-semibold text-slate-600 truncate">-</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tautan Drive -->
+        <div id="detail-link-container" class="pt-4 border-t border-slate-100">
+          <a 
+            id="detail-link-btn" 
+            href="#" 
+            target="_blank" 
+            class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-4 rounded-xl text-xs text-center flex items-center justify-center space-x-2 shadow-lg shadow-emerald-600/15 transition"
+          >
+            <i class="fa-solid fa-cloud-arrow-down"></i>
+            <span>Buka Lampiran Berkas (Google Drive)</span>
+          </a>
+        </div>
+      </div>
+      
+      <!-- Footer -->
+      <div class="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+        <button 
+          onclick="closeDetailModal()" 
+          class="bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs px-4 py-2 rounded-xl transition"
+        >
+          Tutup Rincian
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- NOTIFIKASI TOAST CUSTOM (No alert!) -->
+  <div id="toast" class="fixed bottom-6 right-6 z-50 flex items-center space-x-3 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl border border-slate-800/80 transform translate-y-24 opacity-0 transition-all duration-300 pointer-events-none">
+    <div id="toastIcon" class="text-emerald-500 text-lg">
+      <i class="fa-solid fa-circle-check"></i>
+    </div>
+    <div class="text-xs font-semibold" id="toastMessage">Sandi Berhasil Disimpan</div>
+  </div>
+
+  <!-- MODAL DIALOG HAPUS CUSTOM (No confirm!) -->
+  <div id="confirmModal" class="fixed inset-0 bg-slate-900/60 blur-bg z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl p-6 space-y-4">
+      <div class="text-center">
+        <div class="w-12 h-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto mb-3">
+          <i class="fa-solid fa-trash-can text-xl"></i>
+        </div>
+        <h4 class="text-md font-bold text-slate-800">Hapus Dokumen Permanen?</h4>
+        <p class="text-xs text-slate-400 mt-1">Dokumen yang dihapus tidak dapat dipulihkan kembali dari server atau lokal browser Anda.</p>
+      </div>
+
+      <div class="flex items-center justify-center space-x-3 pt-2">
+        <button 
+          onclick="closeConfirmModal()" 
+          class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold px-4 py-2 rounded-xl text-xs transition"
+        >
+          Batal
+        </button>
+        <button 
+          id="confirmDeleteBtn"
+          class="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2 rounded-xl text-xs shadow-lg shadow-red-600/15 transition"
+        >
+          Ya, Hapus
+        </button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- MAIN JS SCRIPTS -->
+  <script>
+    // Inisialisasi awal saat window dimuat
+    window.onload = function() {
+      initSettings();
+      setupKategoriOptions();
+      
+      // Jika pengguna pernah masuk sebelumnya dan sesi dipertahankan (simulasi)
+      const userLogged = sessionStorage.getItem('silahap_session_active');
+      if (userLogged === 'true') {
+        AppState.isLoggedIn = true;
+        showDashboardScreen();
+      } else {
+        showLoginScreen();
+      }
+    };
+
+    // Fungsi Pengatur Tampilan Tembus Pandang Sandi
+    function togglePasswordVisibility(fieldId) {
+      const field = document.getElementById(fieldId);
+      const eye = document.getElementById('passwordEye');
+      if (field.type === 'password') {
+        field.type = 'text';
+        eye.classList.remove('fa-eye');
+        eye.classList.add('fa-eye-slash');
+      } else {
+        field.type = 'password';
+        eye.classList.remove('fa-eye-slash');
+        eye.classList.add('fa-eye');
+      }
+    }
+
+    // Meluncurkan Notifikasi Toast buatan sendiri
+    function showToast(message, isError = false) {
+      const toast = document.getElementById('toast');
+      const toastMsg = document.getElementById('toastMessage');
+      const toastIcon = document.getElementById('toastIcon');
+
+      toastMsg.innerText = message;
+      if (isError) {
+        toastIcon.innerHTML = '<i class="fa-solid fa-circle-exclamation text-red-500"></i>';
+      } else {
+        toastIcon.innerHTML = '<i class="fa-solid fa-circle-check text-emerald-500"></i>';
+      }
+
+      toast.classList.remove('translate-y-24', 'opacity-0');
+      toast.classList.add('translate-y-0', 'opacity-100');
+
+      setTimeout(() => {
+        toast.classList.add('translate-y-24', 'opacity-0');
+        toast.classList.remove('translate-y-0', 'opacity-100');
+      }, 3500);
+    }
+
+    // Setup Opsi Kategori untuk dropdown Form & Filter
+    function setupKategoriOptions() {
+      const formKat = document.getElementById('form-kategori');
+      formKat.innerHTML = '';
+      AppState.categories.forEach(cat => {
+        const opt = document.createElement('option');
+        opt.value = cat;
+        opt.innerText = cat;
+        formKat.appendChild(opt);
+      });
+    }
+
+    function handleLogin(event) {
+      event.preventDefault();
+      const pwdInput = document.getElementById('password').value;
+      const errorMsg = document.getElementById('loginErrorMessage');
+
+      if (pwdInput === AppState.currentPassword) {
+        AppState.isLoggedIn = true;
+        sessionStorage.setItem('silahap_session_active', 'true');
+        errorMsg.classList.add('hidden');
+        showDashboardScreen();
+        showToast("Login berhasil! Selamat datang di SILAHAP.");
+      } else {
+        errorMsg.classList.remove('hidden');
+        showToast("Sandi tidak cocok!", true);
+      }
+    }
+
+    function logout() {
+      AppState.isLoggedIn = false;
+      sessionStorage.removeItem('silahap_session_active');
+      showLoginScreen();
+      showToast("Berhasil keluar dari sesi.");
+    }
+
+    function showLoginScreen() {
+      document.getElementById('loginScreen').classList.remove('hidden');
+      document.getElementById('appScreen').classList.add('hidden');
+      document.getElementById('password').value = '';
+    }
+
+    function showDashboardScreen() {
+      document.getElementById('loginScreen').classList.add('hidden');
+      document.getElementById('appScreen').classList.remove('hidden');
+      
+      // Mengubah Teks Samping
+      updateSidebarBadges();
+      switchTab(AppState.currentTab);
+    }
+
+    async function syncData() {
+      const syncIcon = document.getElementById('syncIcon');
+      syncIcon.classList.add('animate-spin');
+
+      if (AppState.connectionMode === 'demo') {
+        // Ambil dari LocalStorage saja
+        const localData = localStorage.getItem('silahap_local_docs');
+        if (localData) {
+          AppState.documents = JSON.parse(localData);
+        } else {
+          AppState.documents = [...AppState.localMockData];
+        }
+        showToast("Data disinkronkan dari database lokal browser.");
+        renderActiveTab();
+      } else {
+        // Mode Google Apps Script Terkoneksi Cloud
+        if (!AppState.gasUrl) {
+          showToast("Hubungkan URL Apps Script terlebih dahulu di menu Pengaturan Koneksi!", true);
+          switchTab('settings');
+          syncIcon.classList.remove('animate-spin');
+          return;
+        }
+
+        try {
+          // Menyiapkan loading state tabel
+          toggleTableLoading(true);
+
+          const response = await fetch(AppState.gasUrl, {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'text/plain' }, // Hindari CORS pre-flight preemption
+            body: JSON.stringify({ action: 'read' })
+          });
+
+          const resJson = await response.json();
+          if (resJson.status === 'success') {
+            AppState.documents = resJson.data || [];
+            showToast("Sinkronisasi real-time cloud sukses!");
+            renderActiveTab();
+          } else {
+            showToast("Server merespons galat: " + resJson.message, true);
+          }
+        } catch (error) {
+          console.error(error);
+          showToast("Gagal terhubung dengan Spreadsheet. Periksa URL API Anda.", true);
+        } finally {
+          toggleTableLoading(false);
+        }
+      }
+
+      syncIcon.classList.remove('animate-spin');
+      updateSidebarBadges();
+    }
+
+    function toggleTableLoading(show) {
+      const loader = document.getElementById('tableLoadingState');
+      const table = document.getElementById('tableContainer');
+      if (show) {
+        loader.classList.remove('hidden');
+        loader.classList.add('flex');
+        table.classList.add('opacity-40');
+      } else {
+        loader.classList.add('hidden');
+        loader.classList.remove('flex');
+        table.classList.remove('opacity-40');
+      }
+    }
+
+    function switchTab(tabId) {
+      AppState.currentTab = tabId;
+      
+      // Update UI Sidebar menu aktif
+      const menus = ['dashboard', 'lhp', 'reviu', 'monitoring', 'settings'];
+      menus.forEach(m => {
+        const el = document.getElementById(`btn-tab-${m}`);
+        if (m === tabId) {
+          el.className = "w-full flex items-center justify-between px-4 py-3 rounded-xl font-bold text-sm bg-indigo-600 text-white transition shadow-lg shadow-indigo-600/10";
+          // Jika m = dashboard atau settings yang tidak memiliki badge hitung
+          if(m === 'dashboard' || m === 'settings') {
+            el.className = "w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-bold text-sm bg-indigo-600 text-white transition shadow-lg shadow-indigo-600/10";
+          }
+        } else {
+          el.className = "w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm text-slate-400 hover:bg-slate-900/60 hover:text-white transition";
+          if(m === 'dashboard' || m === 'settings') {
+            el.className = "w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium text-sm text-slate-400 hover:bg-slate-900/60 hover:text-white transition";
+          }
+        }
+      });
+
+      // Update Judul Halaman Atas
+      const pageTitle = document.getElementById('pageTitle');
+      const pageSubtitle = document.getElementById('pageSubtitle');
+
+      if (tabId === 'dashboard') {
+        pageTitle.innerText = "Dashboard Analisis Arsip";
+        pageSubtitle.innerText = "Ringkasan metrik statistik hasil temuan pemeriksaan.";
+        document.getElementById('tab-content-dashboard').classList.remove('hidden');
+        document.getElementById('tab-content-documents').classList.add('hidden');
+        document.getElementById('tab-content-settings').classList.add('hidden');
+        renderDashboardData();
+      } else if (tabId === 'settings') {
+        pageTitle.innerText = "Pengaturan Sistem";
+        pageSubtitle.innerText = "Konfigurasi koneksi Google Sheets & kredensial administrator.";
+        document.getElementById('tab-content-dashboard').classList.add('hidden');
+        document.getElementById('tab-content-documents').classList.add('hidden');
+        document.getElementById('tab-content-settings').classList.remove('hidden');
+        renderSettingsData();
+      } else {
+        // Tab Dokumen LHP, Reviu, Monitoring
+        const tipeLabel = tabId.toUpperCase();
+        pageTitle.innerText = `Arsip Dokumen ${tipeLabel}`;
+        pageSubtitle.innerText = `Daftar lengkap berkas kategori ${tipeLabel} yang terdata di sistem.`;
+        document.getElementById('tab-content-dashboard').classList.add('hidden');
+        document.getElementById('tab-content-documents').classList.remove('hidden');
+        document.getElementById('tab-content-settings').classList.add('hidden');
+        resetFilters();
+        renderDocuments();
+      }
+
+      // Tutup Sidebar Mobile jika sedang aktif
+      const sidebar = document.getElementById('sidebar');
+      sidebar.classList.remove('absolute', 'inset-y-0', 'left-0', 'z-40', 'flex', 'w-64');
+    }
+
+    function toggleMobileSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      if (sidebar.classList.contains('hidden')) {
+        sidebar.classList.remove('hidden');
+        sidebar.classList.add('absolute', 'inset-y-0', 'left-0', 'z-40', 'flex', 'w-64');
+      } else {
+        sidebar.classList.add('hidden');
+        sidebar.classList.remove('absolute', 'inset-y-0', 'left-0', 'z-40', 'flex', 'w-64');
+      }
+    }
+
+    function updateSidebarBadges() {
+      const totalDocs = AppState.documents.length;
+      const totalLhp = AppState.documents.filter(d => d['Tipe Dokumen'] === 'LHP').length;
+      const totalReviu = AppState.documents.filter(d => d['Tipe Dokumen'] === 'Reviu').length;
+      const totalMon = AppState.documents.filter(d => d['Tipe Dokumen'] === 'Monitoring').length;
+
+      document.getElementById('badge-count-lhp').innerText = totalLhp;
+      document.getElementById('badge-count-reviu').innerText = totalReviu;
+      document.getElementById('badge-count-monitoring').innerText = totalMon;
+
+      // Update Badge Mode sidebar
+      const badge = document.getElementById('sidebarModeBadge');
+      if (AppState.connectionMode === 'demo') {
+        badge.innerText = "LOCAL SANDBOX";
+        badge.className = "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20";
+      } else {
+        badge.innerText = "GOOGLE SHEET";
+        badge.className = "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20";
+      }
+    }
+
+    function renderActiveTab() {
+      if (AppState.currentTab === 'dashboard') {
+        renderDashboardData();
+      } else if (AppState.currentTab === 'settings') {
+        renderSettingsData();
+      } else {
+        renderDocuments();
+      }
+    }
+
+    function renderDashboardData() {
+      const docs = AppState.documents;
+      
+      const totalLhp = docs.filter(d => d['Tipe Dokumen'] === 'LHP').length;
+      const totalReviu = docs.filter(d => d['Tipe Dokumen'] === 'Reviu').length;
+      const totalMon = docs.filter(d => d['Tipe Dokumen'] === 'Monitoring').length;
+
+      document.getElementById('stat-total').innerText = docs.length;
+      document.getElementById('stat-lhp').innerText = totalLhp;
+      document.getElementById('stat-reviu').innerText = totalReviu;
+      document.getElementById('stat-monitoring').innerText = totalMon;
+
+      // Render 5 Data Terakhir di Aktivitas Terbaru
+      const recentTable = document.getElementById('recentActivityTable');
+      recentTable.innerHTML = '';
+
+      const lastFive = [...docs].reverse().slice(0, 5);
+      
+      if (lastFive.length === 0) {
+        recentTable.innerHTML = `
+          <tr>
+            <td colspan="5" class="px-4 py-6 text-center text-slate-400 text-xs">Belum ada arsip dokumen yang dimasukkan.</td>
+          </tr>
+        `;
+      } else {
+        lastFive.forEach(doc => {
+          let badgeTipeClass = "bg-emerald-50 text-emerald-700 border-emerald-100";
+          if (doc['Tipe Dokumen'] === 'Reviu') badgeTipeClass = "bg-sky-50 text-sky-700 border-sky-100";
+          if (doc['Tipe Dokumen'] === 'Monitoring') badgeTipeClass = "bg-amber-50 text-amber-700 border-amber-100";
+
+          const tr = document.createElement('tr');
+          tr.className = "border-b border-slate-100 hover:bg-slate-50 transition text-xs";
+          tr.innerHTML = `
+            <td class="px-4 py-3">
+              <span class="font-bold text-slate-800 block">${doc['ID']}</span>
+              <span class="text-[10px] text-slate-400">${doc['Tanggal Input'] || '-'}</span>
+            </td>
+            <td class="px-4 py-3 max-w-xs">
+              <p class="font-semibold text-indigo-900 truncate">${doc['Nomor LHP']}</p>
+              <p class="text-slate-500 truncate mt-0.5">${doc['Judul Dokumen']}</p>
+            </td>
+            <td class="px-4 py-3">
+              <div class="flex flex-col space-y-1">
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold border ${badgeTipeClass} w-max">${doc['Tipe Dokumen']}</span>
+                <span class="text-slate-500 font-medium pl-1">${doc['Kategori']}</span>
+              </div>
+            </td>
+            <td class="px-4 py-3 max-w-xs truncate font-medium text-slate-600">
+              ${doc['Temuan']}
+            </td>
+            <td class="px-4 py-3 text-right whitespace-nowrap">
+              <button onclick="viewDocDetail('${doc['ID']}')" class="text-indigo-600 hover:text-indigo-900 p-1.5" title="Lihat Rincian"><i class="fa-solid fa-eye text-sm"></i></button>
+            </td>
+          `;
+          recentTable.appendChild(tr);
+        });
+      }
+
+      // Update Grafik Statistika
+      renderCharts(totalLhp, totalReviu, totalMon);
+    }
+
+    // Inisialisasi Grafik Chart.js
+    function renderCharts(lhp, reviu, mon) {
+      const ctxTipe = document.getElementById('chartTipeCanvas').getContext('2d');
+      const ctxKat = document.getElementById('chartKategoriCanvas').getContext('2d');
+
+      // Hancurkan chart lama jika ada untuk mencegah tabrakan memory render
+      if (chartTipe) chartTipe.destroy();
+      if (chartKategori) chartKategori.destroy();
+
+      // Chart Proporsi Tipe Dokumen (Doughnut)
+      chartTipe = new Chart(ctxTipe, {
+        type: 'doughnut',
+        data: {
+          labels: ['LHP', 'Reviu', 'Monitoring'],
+          datasets: [{
+            data: [lhp, reviu, mon],
+            backgroundColor: ['#10b981', '#0ea5e9', '#f59e0b'],
+            borderColor: '#ffffff',
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: { boxWidth: 12, font: { size: 10, family: 'Inter' } }
+            }
+          }
+        }
+      });
+
+      // Hitung rincian temuan per kategori
+      const catCounts = {};
+      AppState.categories.forEach(cat => catCounts[cat] = 0);
+      AppState.documents.forEach(doc => {
+        if (catCounts[doc['Kategori']] !== undefined) {
+          catCounts[doc['Kategori']]++;
+        }
+      });
+
+      // Chart Kategori Temuan (Bar)
+      chartKategori = new Chart(ctxKat, {
+        type: 'bar',
+        data: {
+          labels: AppState.categories,
+          datasets: [{
+            label: 'Jumlah Kasus',
+            data: AppState.categories.map(cat => catCounts[cat]),
+            backgroundColor: '#6366f1',
+            borderRadius: 6,
+            borderSkipped: false
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: { stepSize: 1, font: { size: 10, family: 'Inter' } },
+              grid: { color: '#f1f5f9' }
+            },
+            x: {
+              ticks: { font: { size: 10, family: 'Inter' } },
+              grid: { display: false }
+            }
+          }
+        }
+      });
+    }
+
+    function resetFilters() {
+      document.getElementById('docSearch').value = '';
+      document.getElementById('docFilterCategory').value = '';
+      document.getElementById('docFilterYear').value = '';
+      AppState.searchQuery = '';
+      AppState.filterCategory = '';
+      AppState.filterYear = '';
+    }
+
+    function handleSearch(val) {
+      AppState.searchQuery = val.toLowerCase();
+      renderDocuments();
+    }
+
+    // Penanganan filter dropdown kategori
+    function handleCategoryFilter(val) {
+      AppState.filterCategory = val;
+      renderDocuments();
+    }
+
+    // Penanganan filter dropdown tahun
+    function handleYearFilter(val) {
+      AppState.filterYear = val;
+      renderDocuments();
+    }
+
+    function renderDocuments() {
+      const listTable = document.getElementById('documentListTable');
+      listTable.innerHTML = '';
+
+      // Tipe dokumen yang disaring sesuai tab aktif ('lhp', 'reviu', 'monitoring')
+      const activeTipe = AppState.currentTab === 'lhp' ? 'LHP' : (AppState.currentTab === 'reviu' ? 'Reviu' : 'Monitoring');
+
+      let filtered = AppState.documents.filter(doc => doc['Tipe Dokumen'] === activeTipe);
+
+      // Saring Kategori
+      if (AppState.filterCategory) {
+        filtered = filtered.filter(doc => doc['Kategori'] === AppState.filterCategory);
+      }
+
+      // Saring Tahun
+      if (AppState.filterYear) {
+        filtered = filtered.filter(doc => doc['Tahun'] == AppState.filterYear);
+      }
+
+      // Saring Kata Kunci Pencarian
+      if (AppState.searchQuery) {
+        filtered = filtered.filter(doc => {
+          return (doc['Nomor LHP'] && doc['Nomor LHP'].toLowerCase().includes(AppState.searchQuery)) ||
+                 (doc['Judul Dokumen'] && doc['Judul Dokumen'].toLowerCase().includes(AppState.searchQuery)) ||
+                 (doc['Temuan'] && doc['Temuan'].toLowerCase().includes(AppState.searchQuery)) ||
+                 (doc['Penginput'] && doc['Penginput'].toLowerCase().includes(AppState.searchQuery)) ||
+                 (doc['ID'] && doc['ID'].toLowerCase().includes(AppState.searchQuery));
+        });
+      }
+
+      // Toggle Empty State
+      const emptyState = document.getElementById('tableEmptyState');
+      const tableContainer = document.getElementById('tableContainer');
+      
+      if (filtered.length === 0) {
+        emptyState.classList.remove('hidden');
+        emptyState.classList.add('flex');
+        tableContainer.classList.add('hidden');
+        return;
+      } else {
+        emptyState.classList.add('hidden');
+        emptyState.classList.remove('flex');
+        tableContainer.classList.remove('hidden');
+      }
+
+      // Urutkan dari data paling baru diinput (ID atau Tanggal Input terbesar)
+      filtered.reverse();
+
+      filtered.forEach(doc => {
+        const tr = document.createElement('tr');
+        tr.className = "border-b border-slate-100 hover:bg-slate-50 transition align-top text-xs";
+        
+        const hasLink = doc['Link File'] && doc['Link File'].startsWith('http');
+        const linkBadge = hasLink 
+          ? `<a href="${doc['Link File']}" target="_blank" class="inline-flex items-center space-x-1 text-emerald-600 hover:text-emerald-700 font-bold bg-emerald-50 border border-emerald-100 px-2 py-1 rounded-lg">
+              <i class="fa-solid fa-cloud-arrow-down"></i> <span>Berkas</span>
+             </a>`
+          : `<span class="inline-flex items-center text-slate-400 bg-slate-50 border border-slate-100 px-2 py-1 rounded-lg">Tanpa Link</span>`;
+
+        tr.innerHTML = `
+          <td class="px-6 py-4 font-mono font-bold text-slate-900 whitespace-nowrap">
+            <span class="block text-xs">${doc['ID']}</span>
+            <span class="text-[10px] text-slate-400 font-normal mt-1 block">${doc['Tanggal Input'] || '-'}</span>
+          </td>
+          <td class="px-6 py-4 max-w-xs">
+            <p class="font-semibold text-slate-800 leading-normal mb-1 break-words">${doc['Nomor LHP']}</p>
+            <p class="text-slate-500 font-normal leading-relaxed break-words">${doc['Judul Dokumen']}</p>
+          </td>
+          <td class="px-6 py-4">
+            <span class="font-bold text-slate-700 block">${doc['Kategori']}</span>
+            <span class="text-slate-400 text-[10px] mt-1 block">Tahun ${doc['Tahun']}</span>
+          </td>
+          <td class="px-6 py-4 max-w-sm">
+            <p class="text-slate-600 font-medium leading-relaxed line-clamp-3 hover:line-clamp-none transition cursor-pointer" title="Klik untuk rincian">
+              ${doc['Temuan']}
+            </p>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap">
+            ${linkBadge}
+          </td>
+          <td class="px-6 py-4 text-center whitespace-nowrap">
+            <div class="flex items-center justify-center space-x-2">
+              <button onclick="viewDocDetail('${doc['ID']}')" class="text-slate-500 hover:text-indigo-600 p-2 hover:bg-slate-100 rounded-lg transition" title="Lihat Detail">
+                <i class="fa-solid fa-eye text-sm"></i>
+              </button>
+              <button onclick="openEditModal('${doc['ID']}')" class="text-indigo-600 hover:text-indigo-900 p-2 hover:bg-indigo-50 rounded-lg transition" title="Edit Arsip">
+                <i class="fa-solid fa-pencil text-sm"></i>
+              </button>
+              <button onclick="triggerDeleteDoc('${doc['ID']}')" class="text-red-500 hover:text-red-700 p-2 hover:bg-red-50 rounded-lg transition" title="Hapus Permanen">
+                <i class="fa-solid fa-trash-can text-sm"></i>
+              </button>
+            </div>
+          </td>
+        `;
+        listTable.appendChild(tr);
+      });
+    }
+
+    function openAddModal() {
+      document.getElementById('modalTitle').innerText = "Arsipkan Dokumen Hasil Pemeriksaan";
+      document.getElementById('docForm').reset();
+      document.getElementById('form-doc-id').value = '';
+      
+      // Mengunci tipe dokumen dropdown berdasarkan tab aktif di sidebar
+      const selectTipe = document.getElementById('form-tipe');
+      if (AppState.currentTab === 'lhp') selectTipe.value = 'LHP';
+      else if (AppState.currentTab === 'reviu') selectTipe.value = 'Reviu';
+      else if (AppState.currentTab === 'monitoring') selectTipe.value = 'Monitoring';
+      else selectTipe.value = 'LHP';
+
+      // default penginput
+      document.getElementById('form-penginput').value = "Petugas Arsip";
+
+      const modal = document.getElementById('docModal');
+      modal.classList.remove('hidden');
+    }
+
+    function openEditModal(id) {
+      const doc = AppState.documents.find(d => d.ID === id);
+      if (!doc) return;
+
+      document.getElementById('modalTitle').innerText = `Perbarui Arsip Dokumen - ${id}`;
+      document.getElementById('form-doc-id').value = doc['ID'];
+      document.getElementById('form-tipe').value = doc['Tipe Dokumen'] || 'LHP';
+      document.getElementById('form-kategori').value = doc['Kategori'] || 'Keuangan';
+      document.getElementById('form-nomor').value = doc['Nomor LHP'] || '';
+      document.getElementById('form-tahun').value = doc['Tahun'] || '2026';
+      document.getElementById('form-judul').value = doc['Judul Dokumen'] || '';
+      document.getElementById('form-link').value = doc['Link File'] || '';
+      document.getElementById('form-temuan').value = doc['Temuan'] || '';
+      document.getElementById('form-penginput').value = doc['Penginput'] || '';
+
+      const modal = document.getElementById('docModal');
+      modal.classList.remove('hidden');
+    }
+
+    function closeDocModal() {
+      document.getElementById('docModal').classList.add('hidden');
+    }
+
+    async function submitDocForm(event) {
+      event.preventDefault();
+      
+      const docId = document.getElementById('form-doc-id').value;
+      const isEdit = docId !== '';
+      
+      // Menyusun objek kiriman data
+      const docPayload = {
+        nomorLhp: document.getElementById('form-nomor').value,
+        tahun: document.getElementById('form-tahun').value,
+        kategori: document.getElementById('form-kategori').value,
+        temuan: document.getElementById('form-temuan').value,
+        judulDokumen: document.getElementById('form-judul').value,
+        linkFile: document.getElementById('form-link').value,
+        tipeDokumen: document.getElementById('form-tipe').value,
+        tanggalInput: new Date().toISOString().slice(0, 10),
+        penginput: document.getElementById('form-penginput').value
+      };
+
+      if (AppState.connectionMode === 'demo') {
+        // Logika Menyimpan Offline sandbox
+        if (isEdit) {
+          const index = AppState.documents.findIndex(d => d.ID === docId);
+          if (index !== -1) {
+            AppState.documents[index] = {
+              ID: docId,
+              "Nomor LHP": docPayload.nomorLhp,
+              "Tahun": docPayload.tahun,
+              "Kategori": docPayload.kategori,
+              "Temuan": docPayload.temuan,
+              "Judul Dokumen": docPayload.judulDokumen,
+              "Link File": docPayload.linkFile,
+              "Tipe Dokumen": docPayload.tipeDokumen,
+              "Tanggal Input": AppState.documents[index]["Tanggal Input"] || docPayload.tanggalInput,
+              "Penginput": docPayload.penginput
+            };
+            showToast("Arsip dokumen berhasil diperbarui di memori lokal!");
+          }
+        } else {
+          const randNum = Math.floor(100 + Math.random() * 900);
+          const genId = "DOC-17" + new Date().getTime().toString().slice(-6) + randNum;
+          AppState.documents.push({
+            ID: genId,
+            "Nomor LHP": docPayload.nomorLhp,
+            "Tahun": docPayload.tahun,
+            "Kategori": docPayload.kategori,
+            "Temuan": docPayload.temuan,
+            "Judul Dokumen": docPayload.judulDokumen,
+            "Link File": docPayload.linkFile,
+            "Tipe Dokumen": docPayload.tipeDokumen,
+            "Tanggal Input": docPayload.tanggalInput,
+            "Penginput": docPayload.penginput
+          });
+          showToast(`Berkas sukses disimpan secara lokal! ID: ${genId}`);
+        }
+        
+        // Simpan ke LocalStorage agar persisten offline
+        localStorage.setItem('silahap_local_docs', JSON.stringify(AppState.documents));
+        closeDocModal();
+        renderActiveTab();
+        updateSidebarBadges();
+      } else {
+        // Logika Penyimpanan ke Google Sheets Cloud API
+        if (!AppState.gasUrl) {
+          showToast("Atur URL Web App Google Apps Script di Pengaturan terlebih dahulu!", true);
+          return;
+        }
+
+        try {
+          showToast("Mengunggah dokumen ke Google Sheets...");
+          closeDocModal();
+          toggleTableLoading(true);
+
+          let payload = {
+            action: isEdit ? 'update' : 'create',
+            data: docPayload
+          };
+
+          if (isEdit) {
+            // Jika edit, sertakan properti ID
+            payload.data.ID = docId;
+            payload.data.tanggalInput = AppState.documents.find(d => d.ID === docId)["Tanggal Input"] || docPayload.tanggalInput;
+          }
+
+          const response = await fetch(AppState.gasUrl, {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify(payload)
+          });
+
+          const res = await response.json();
+          if (res.status === 'success') {
+            showToast(res.message);
+            await syncData(); // Muat ulang data terbaru dari cloud
+          } else {
+            showToast("Galat: " + res.message, true);
+          }
+        } catch (error) {
+          console.error(error);
+          showToast("Gagal menyimpan dokumen ke cloud. Pastikan internet stabil.", true);
+        } finally {
+          toggleTableLoading(false);
+        }
+      }
+    }
+
+    function viewDocDetail(id) {
+      const doc = AppState.documents.find(d => d.ID === id);
+      if (!doc) return;
+
+      AppState.activeDoc = doc; // set dokumen aktif untuk keperluan analisis AI
+
+      document.getElementById('detail-header-id').innerText = `ID: ${doc['ID']}`;
+      document.getElementById('detail-nomor').innerText = doc['Nomor LHP'] || '-';
+      document.getElementById('detail-judul').innerText = doc['Judul Dokumen'] || '-';
+      document.getElementById('detail-temuan').innerText = doc['Temuan'] || '-';
+      document.getElementById('detail-tanggal').innerText = doc['Tanggal Input'] || '-';
+      document.getElementById('detail-penginput').innerText = doc['Penginput'] || '-';
+      
+      // Reset area hasil AI khusus
+      document.getElementById('aiSpecificResultArea').classList.add('hidden');
+      document.getElementById('aiSpecificText').innerHTML = '';
+      
+      const badgeTipe = document.getElementById('detail-badge-tipe');
+      badgeTipe.innerText = doc['Tipe Dokumen'];
+      if (doc['Tipe Dokumen'] === 'LHP') {
+        badgeTipe.className = "text-xs px-2.5 py-1 rounded-full font-bold uppercase bg-emerald-100 text-emerald-800";
+      } else if (doc['Tipe Dokumen'] === 'Reviu') {
+        badgeTipe.className = "text-xs px-2.5 py-1 rounded-full font-bold uppercase bg-sky-100 text-sky-800";
+      } else {
+        badgeTipe.className = "text-xs px-2.5 py-1 rounded-full font-bold uppercase bg-amber-100 text-amber-800";
+      }
+
+      document.getElementById('detail-badge-kategori').innerText = doc['Kategori'] || 'Lainnya';
+      document.getElementById('detail-badge-tahun').innerText = `Tahun ${doc['Tahun'] || '-'}`;
+
+      const linkContainer = document.getElementById('detail-link-container');
+      const linkBtn = document.getElementById('detail-link-btn');
+      
+      if (doc['Link File'] && doc['Link File'].startsWith('http')) {
+        linkContainer.classList.remove('hidden');
+        linkBtn.href = doc['Link File'];
+      } else {
+        linkContainer.classList.add('hidden');
+      }
+
+      document.getElementById('detailModal').classList.remove('hidden');
+    }
+
+    function closeDetailModal() {
+      document.getElementById('detailModal').classList.add('hidden');
+      AppState.activeDoc = null;
+    }
+
+    // Trigger Dialog Konfirmasi Hapus Tanpa alert/confirm
+    let idToDelete = null;
+
+    function triggerDeleteDoc(id) {
+      idToDelete = id;
+      document.getElementById('confirmModal').classList.remove('hidden');
+      document.getElementById('confirmDeleteBtn').onclick = executeDeleteDoc;
+    }
+
+    function closeConfirmModal() {
+      document.getElementById('confirmModal').classList.add('hidden');
+      idToDelete = null;
+    }
+
+    async function executeDeleteDoc() {
+      if (!idToDelete) return;
+      
+      const id = idToDelete;
+      closeConfirmModal();
+
+      if (AppState.connectionMode === 'demo') {
+        // Hapus dari data lokal
+        AppState.documents = AppState.documents.filter(d => d.ID !== id);
+        localStorage.setItem('silahap_local_docs', JSON.stringify(AppState.documents));
+        showToast(`Dokumen ID ${id} berhasil dihapus dari penyimpanan lokal.`);
+        renderActiveTab();
+        updateSidebarBadges();
+      } else {
+        // Hapus langsung di Google Sheets Cloud
+        if (!AppState.gasUrl) {
+          showToast("Pengaturan URL Apps Script kosong!", true);
+          return;
+        }
+
+        try {
+          showToast(`Mengajukan penghapusan ID ${id} di Cloud Google Sheet...`);
+          toggleTableLoading(true);
+
+          const response = await fetch(AppState.gasUrl, {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ action: 'delete', id: id })
+          });
+
+          const res = await response.json();
+          if (res.status === 'success') {
+            showToast(res.message);
+            await syncData(); // Muat ulang data terbaru
+          } else {
+            showToast("Gagal menghapus: " + res.message, true);
+          }
+        } catch (error) {
+          console.error(error);
+          showToast("Koneksi gagal saat menghapus berkas.", true);
+        } finally {
+          toggleTableLoading(false);
+        }
+      }
+    }
+
+    function renderSettingsData() {
+      const mode = AppState.connectionMode;
+      
+      // Sorot Card Mode yang aktif
+      const cardDemo = document.getElementById('mode-card-demo');
+      const cardGas = document.getElementById('mode-card-gas');
+
+      if (mode === 'demo') {
+        cardDemo.className = "border-2 border-indigo-600 bg-indigo-50/20 rounded-xl p-4 cursor-pointer transition flex items-start space-x-3";
+        cardGas.className = "border border-slate-200 hover:border-slate-300 rounded-xl p-4 cursor-pointer transition flex items-start space-x-3 bg-white";
+        document.getElementById('gas-url-container').classList.add('hidden');
+      } else {
+        cardGas.className = "border-2 border-purple-600 bg-purple-50/20 rounded-xl p-4 cursor-pointer transition flex items-start space-x-3";
+        cardDemo.className = "border border-slate-200 hover:border-slate-300 rounded-xl p-4 cursor-pointer transition flex items-start space-x-3 bg-white";
+        document.getElementById('gas-url-container').classList.remove('hidden');
+      }
+
+      document.getElementById('gasUrlInput').value = AppState.gasUrl;
+      document.getElementById('geminiKeyInput').value = AppState.geminiApiKey;
+      document.getElementById('newPassInput').value = '';
+    }
+
+    function setStorageMode(mode) {
+      AppState.connectionMode = mode;
+      renderSettingsData();
+    }
+
+    function saveConnectionConfig() {
+      const inputUrl = document.getElementById('gasUrlInput').value.trim();
+      const inputGemini = document.getElementById('geminiKeyInput').value.trim();
+      
+      if (AppState.connectionMode === 'gas' && !inputUrl) {
+        showToast("Mohon masukkan URL Apps Script yang valid!", true);
+        return;
+      }
+
+      AppState.gasUrl = inputUrl;
+      AppState.geminiApiKey = inputGemini;
+      
+      localStorage.setItem('silahap_mode', AppState.connectionMode);
+      localStorage.setItem('silahap_gas_url', AppState.gasUrl);
+      localStorage.setItem('silahap_gemini_key', AppState.geminiApiKey);
+
+      showToast("Konfigurasi penyimpanan berhasil diperbarui!");
+      updateSidebarBadges();
+      
+      // Tarik data ulang
+      syncData();
+    }
+
+    // Fungsi Pengujian Sambungan Gas Web App secara langsung
+    async function testGasConnection() {
+      const url = document.getElementById('gasUrlInput').value.trim();
+      if (!url) {
+        showToast("Isi URL Apps Script terlebih dahulu sebelum melakukan pengetesan!", true);
+        return;
+      }
+
+      try {
+        showToast("Menghubungi endpoint API Apps Script...");
+        const response = await fetch(url, {
+          method: 'GET',
+          mode: 'cors'
+        });
+
+        const text = await response.text();
+        const data = JSON.parse(text);
+        
+        if (data.status === 'success') {
+          showToast("Sinyal respon OK! Koneksi tersambung sepenuhnya.");
+        } else {
+          showToast("Respon tidak terduga: " + text, true);
+        }
+      } catch (error) {
+        console.error(error);
+        showToast("Gagal menjangkau endpoint. Pastikan Deployment Apps Script diatur 'Anyone'.", true);
+      }
+    }
+
+    // Mengubah password custom aplikasi
+    function updatePassword() {
+      const newPass = document.getElementById('newPassInput').value.trim();
+      if (!newPass || newPass.length < 4) {
+        showToast("Kata sandi harus terdiri dari minimal 4 karakter!", true);
+        return;
+      }
+
+      AppState.currentPassword = newPass;
+      localStorage.setItem('silahap_password', newPass);
+      document.getElementById('newPassInput').value = '';
+      showToast("Kata sandi akses SILAHAP berhasil diubah!");
+    }
+
+    // Mengembalikan data lokal ke template dummy awal
+    function resetLocalDatabase() {
+      AppState.documents = [...AppState.localMockData];
+      localStorage.setItem('silahap_local_docs', JSON.stringify(AppState.documents));
+      showToast("Database lokal sandbox berhasil dikembalikan ke data awal sampel.");
+      updateSidebarBadges();
+      if (AppState.currentTab === 'dashboard') {
+        renderDashboardData();
+      }
+    }
+
+    // ==========================================
+    //           INTEGRASI GEMINI API
+    // ==========================================
+
+    // Driver Pemanggilan Utama Gemini dengan Skema Retries & Exponential Backoff
+    async function callGeminiAPI(prompt, systemInstruction = "") {
+      const apiKey = AppState.geminiApiKey;
+      if (!apiKey) {
+        throw new Error("API_KEY_EMPTY");
+      }
+      
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+      
+      const payload = {
+        contents: [{ parts: [{ text: prompt }] }]
+      };
+      
+      if (systemInstruction) {
+        payload.systemInstruction = { parts: [{ text: systemInstruction }] };
+      }
+
+      let delay = 1000;
+      for (let i = 0; i < 5; i++) {
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (response.status === 400 || response.status === 403) {
+            throw new Error("INVALID_KEY");
+          }
+
+          if (!response.ok) {
+            throw new Error(`HTTP Error Status: ${response.status}`);
+          }
+
+          const result = await response.json();
+          const generatedText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (generatedText) {
+            return generatedText;
+          }
+          throw new Error("Gagal mengekstrak respon teks dari Gemini.");
+        } catch (error) {
+          if (error.message === "INVALID_KEY") throw error;
+          // Jika sudah percobaan kelima, lempar galat keluar
+          if (i === 4) throw error;
+          
+          // Tunggu secara asinkron (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2;
+        }
+      }
+    }
+
+    // Fungsi utilitas untuk memformat struktur teks sederhana bertanda bintang/bullet buatan LLM menjadi HTML ramah baca
+    function formatMarkdownToHTML(text) {
+      if (!text) return "";
+      let html = text
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold bolding
+        .replace(/\*(.*?)\*/g, '<em>$1</em>') // Italic italicizing
+        .replace(/`([^`]+)`/g, '<code class="bg-slate-100 text-indigo-700 font-mono px-1 py-0.5 rounded text-[11px]">$1</code>')
+        .replace(/\n/g, '<br>'); // Line breaks
+      
+      return html;
+    }
+
+    // FITUR CERDAS 1: Analisis Temuan Spesifik (Detail Modal)
+    async function analyzeSpecificFindingAI() {
+      const doc = AppState.activeDoc;
+      if (!doc) {
+        showToast("Tidak ada dokumen aktif untuk dianalisis.", true);
+        return;
+      }
+
+      if (!AppState.geminiApiKey) {
+        showToast("Konfigurasikan API Key Gemini Anda di menu 'Pengaturan Koneksi' terlebih dahulu!", true);
+        return;
+      }
+
+      const container = document.getElementById('aiSpecificResultArea');
+      const loader = document.getElementById('aiSpecificLoading');
+      const outputText = document.getElementById('aiSpecificText');
+
+      container.classList.remove('hidden');
+      loader.classList.remove('hidden');
+      outputText.innerHTML = '';
+
+      const prompt = `
+        MOHON ANALISIS TEMUAN AUDIT BERIKUT:
+        Nomor LHP/Dokumen: ${doc['Nomor LHP']}
+        Kategori Temuan: ${doc['Kategori']}
+        Tipe Dokumen: ${doc['Tipe Dokumen']}
+        Judul Berkas: ${doc['Judul Dokumen']}
+        Isi Rincian Temuan: "${doc['Temuan']}"
+
+        Tolong berikan rekomendasi analisis profesional dalam bahasa Indonesia dengan struktur:
+        1. **Analisis Risiko & Dampak**: Jelaskan risiko keuangan/operasional/hukum nyata jika temuan ini tidak ditindaklanjuti secara sigap.
+        2. **Rekomendasi Rencana Aksi Solutif**: Tuliskan 2-3 langkah konkret terukur untuk menyelesaikan masalah ini demi kepatuhan regulasi.
+        
+        Buat jawaban padat, tajam, dan langsung ke solusi dalam 2 paragraf ringkas saja. Gunakan formatting tanda bintang ganda (**) untuk judul poin penting agar rapi.
+      `;
+
+      const systemInstruction = "Anda adalah seorang Auditor Utama Internal dan Ahli Kepatuhan Hukum Pemerintahan yang sangat berpengalaman, solutif, serta berorientasi pada pencegahan kerugian negara/organisasi.";
+
+      try {
+        const responseText = await callGeminiAPI(prompt, systemInstruction);
+        outputText.innerHTML = formatMarkdownToHTML(responseText);
+      } catch (err) {
+        console.error(err);
+        if (err.message === "INVALID_KEY") {
+          outputText.innerHTML = `<span class="text-red-500 font-semibold"><i class="fa-solid fa-triangle-exclamation mr-1"></i> API Key Gemini Anda tidak valid. Mohon periksa kembali di menu Pengaturan.</span>`;
+        } else {
+          outputText.innerHTML = `<span class="text-red-500 font-semibold"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Gagal menghubungi Gemini AI. Pastikan jaringan internet stabil.</span>`;
+        }
+      } finally {
+        loader.classList.add('hidden');
+      }
+    }
+
+    // FITUR CERDAS 2: Analisis Tren & Policy Recommendation (Dashboard Panel)
+    async function generateSystemicSummaryAI() {
+      const docs = AppState.documents;
+      
+      if (!docs || docs.length === 0) {
+        showToast("Database arsip kosong! Silakan masukkan dokumen terlebih dahulu.", true);
+        return;
+      }
+
+      if (!AppState.geminiApiKey) {
+        showToast("Konfigurasikan API Key Gemini Anda di menu 'Pengaturan Koneksi' terlebih dahulu!", true);
+        return;
+      }
+
+      const container = document.getElementById('aiDashboardSummaryResult');
+      const outputText = document.getElementById('aiDashboardSummaryText');
+
+      container.classList.remove('hidden');
+      outputText.innerHTML = `<div class="flex items-center space-x-2 text-indigo-400 font-bold"><i class="fa-solid fa-circle-notch animate-spin"></i> <span>Membaca dan memindai ${docs.length} dokumen arsip. Merumuskan pola kerentanan sistemik...</span></div>`;
+
+      // Ekstrak metadata temuan agar muatan payload token hemat dan efisien
+      const summaryPayload = docs.map(d => ({
+        id: d.ID,
+        tipe: d['Tipe Dokumen'],
+        kategori: d['Kategori'],
+        judul: d['Judul Dokumen'],
+        temuan_singkat: d['Temuan'] ? d['Temuan'].substring(0, 150) + "..." : ""
+      }));
+
+      const prompt = `
+        BERIKUT ADALAH DAFTAR DATA TEMUAN ARSIP AKTIF DARI SISTEM SILAHAP:
+        ${JSON.stringify(summaryPayload)}
+
+        Tolong bertindak sebagai Kepala Inspektorat Agung. Berdasarkan dataset di atas, susunlah draf Ringkasan Eksekutif (Executive Summary) profesional dalam bahasa Indonesia dengan bagian:
+        1. **Pola Kerentanan Utama**: Kategori temuan mana yang paling kritis/berisiko sistemik bagi organisasi saat ini dan alasannya.
+        2. **Rekomendasi Strategis Pimpinan (3 Poin Utama)**: Solusi perbaikan preventif agar deviasi serupa tidak terulang di masa depan.
+        
+        Tuliskan analisis dalam format yang elegan, taktis, lugas, serta persuasif dalam 3-4 paragraf singkat terstruktur. Gunakan tanda bintang ganda (**) untuk menyoroti istilah penting.
+      `;
+
+      const systemInstruction = "Anda adalah Kepala Inspektorat Pengawas Keuangan dan Kinerja Pemerintahan yang bertugas menganalisis tren kelemahan tata kelola serta memberikan nasihat strategis perbaikan kepada Direktur Utama/Kepala Daerah.";
+
+      try {
+        const responseText = await callGeminiAPI(prompt, systemInstruction);
+        outputText.innerHTML = formatMarkdownToHTML(responseText);
+      } catch (err) {
+        console.error(err);
+        if (err.message === "INVALID_KEY") {
+          outputText.innerHTML = `<span class="text-red-400 font-semibold"><i class="fa-solid fa-triangle-exclamation mr-1"></i> API Key Gemini tidak valid. Hubungkan key yang benar pada menu Pengaturan Koneksi.</span>`;
+        } else {
+          outputText.innerHTML = `<span class="text-red-400 font-semibold"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Gagal menghasilkan laporan analisis pimpinan. Silakan coba sesaat lagi.</span>`;
+        }
+      }
+    }
+  </script>
+</body>
+</html>
